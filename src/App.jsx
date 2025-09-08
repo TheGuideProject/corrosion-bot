@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Upload, Trash2, Send, ImageIcon, ShieldCheck, Loader2 } from "lucide-react";
+import { Upload, Trash2, Send, ImageIcon, ShieldCheck, Loader2, Camera } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 
 const MAX_FILES = 5;
@@ -22,7 +22,11 @@ export default function App() {
   // --- chat persistente ---
   const [chatOpen, setChatOpen] = useState(true);
   const [messages, setMessages] = useState(() => {
-    try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"); } catch { return []; }
+    try {
+      return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+    } catch {
+      return [];
+    }
   });
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -93,6 +97,29 @@ export default function App() {
 
   const removeAt = (idx) => setFiles((prev) => prev.filter((_, i) => i !== idx));
 
+  // --- take photo with camera ---
+  const takePhoto = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      const video = document.createElement("video");
+      video.srcObject = stream;
+      await video.play();
+
+      const canvas = document.createElement("canvas");
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(video, 0, 0);
+
+      const dataUrl = canvas.toDataURL("image/png");
+      stream.getTracks().forEach((track) => track.stop());
+
+      setFiles((prev) => [...prev, { file: null, dataUrl }]);
+    } catch (err) {
+      alert("Camera not available: " + err.message);
+    }
+  };
+
   const submit = async () => {
     try {
       if (!files.length) {
@@ -161,7 +188,13 @@ export default function App() {
                   )}
                   {messages.map((m, i) => (
                     <div key={i} className={`mb-2 ${m.role === "assistant" ? "" : "text-right"}`}>
-                      <div className={`inline-block px-3 py-2 rounded-xl text-sm max-w-[90%] ${m.role === "assistant" ? "bg-white border text-left" : "bg-slate-900 text-white text-right"}`}>
+                      <div
+                        className={`inline-block px-3 py-2 rounded-xl text-sm max-w-[90%] ${
+                          m.role === "assistant"
+                            ? "bg-white border text-left"
+                            : "bg-slate-900 text-white text-right"
+                        }`}
+                      >
                         <ReactMarkdown>{m.content}</ReactMarkdown>
                       </div>
                     </div>
@@ -189,8 +222,168 @@ export default function App() {
           </div>
         </section>
 
-        {/* --- Upload + Metadata (uguale a prima) --- */}
-        {/* ... qui rimane invariato, per brevità lo lascio fuori ... */}
+        {/* --- Upload + Metadata --- */}
+        <section className="grid md:grid-cols-3 gap-6">
+          <div className="md:col-span-2">
+            <div
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={onDrop}
+              className="border-2 border-dashed border-slate-300 rounded-2xl p-6 bg-white shadow-sm"
+            >
+              <div className="flex items-center gap-3">
+                <Upload className="w-5 h-5" />
+                <div>
+                  <p className="font-medium">Upload or Take Photos (JPG/PNG/WEBP)</p>
+                  <p className="text-xs text-slate-500">Max {MAX_FILES} files, 6 MB each</p>
+                </div>
+              </div>
+              <div className="mt-4 flex gap-2">
+                <input
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  onChange={(e) => handleFiles(e.target.files)}
+                  className="block w-full text-sm"
+                />
+                <button
+                  type="button"
+                  onClick={takePhoto}
+                  className="px-3 py-2 rounded-xl bg-slate-900 text-white text-sm hover:bg-slate-800 flex items-center gap-1"
+                >
+                  <Camera className="w-4 h-4" /> Take Photo
+                </button>
+              </div>
+              {files.length > 0 && (
+                <div className="mt-4 grid grid-cols-2 md:grid-cols-3 gap-3">
+                  {files.map((f, i) => (
+                    <div key={i} className="relative group">
+                      <img
+                        src={f.dataUrl}
+                        alt={`upload-${i}`}
+                        className="w-full h-32 object-cover rounded-xl border"
+                      />
+                      <button
+                        onClick={() => removeAt(i)}
+                        className="absolute top-2 right-2 bg-white/90 rounded-full p-1 shadow hover:bg-white"
+                        title="Remove"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* --- Metadata --- */}
+          <aside className="space-y-4">
+            <div className="bg-white border rounded-2xl p-4 shadow-sm">
+              <h2 className="font-semibold mb-3">Metadata</h2>
+
+              <label className="block text-sm mb-2">Location</label>
+              <input
+                className="w-full border rounded-lg p-2 mb-2"
+                placeholder="e.g. Port of Naples"
+                value={meta.location}
+                onChange={(e) => setMeta({ ...meta, location: e.target.value })}
+              />
+              <button
+                type="button"
+                className="text-xs underline"
+                onClick={() => {
+                  if (!navigator.geolocation) return;
+                  navigator.geolocation.getCurrentPosition((pos) => {
+                    setMeta({
+                      ...meta,
+                      coords: { lat: pos.coords.latitude, lon: pos.coords.longitude },
+                      location: `${pos.coords.latitude.toFixed(5)}, ${pos.coords.longitude.toFixed(5)}`,
+                    });
+                  });
+                }}
+              >
+                Use my position
+              </button>
+
+              <label className="block text-sm mt-3 mb-2">Area</label>
+              <select
+                className="w-full border rounded-lg p-2 mb-3"
+                value={meta.area}
+                onChange={(e) => setMeta({ ...meta, area: e.target.value })}
+              >
+                <option>Hull/Topside</option>
+                <option>Deck</option>
+                <option>Ballast Tank</option>
+                <option>Superstructure</option>
+                <option>Underwater Hull</option>
+                <option>Hatch Covers</option>
+                <option>Cargo Holds Dry</option>
+                <option>Internal Visible Steel</option>
+                <option>Internal Decks</option>
+                <option>Fresh/Drinking Water Tank</option>
+                <option>Heat Resistance</option>
+              </select>
+
+              <label className="block text-sm mb-2">Environment</label>
+              <select
+                className="w-full border rounded-lg p-2 mb-3"
+                value={meta.environment}
+                onChange={(e) => setMeta({ ...meta, environment: e.target.value })}
+              >
+                <option>Auto</option>
+                <option>C3</option>
+                <option>C4</option>
+                <option>C5M</option>
+                <option>C5I</option>
+                <option>CX</option>
+              </select>
+
+              <label className="block text-sm mb-2">Substrate</label>
+              <select
+                className="w-full border rounded-lg p-2 mb-3"
+                value={meta.substrate}
+                onChange={(e) => setMeta({ ...meta, substrate: e.target.value })}
+              >
+                <option>Steel</option>
+                <option>Aluminium</option>
+              </select>
+
+              <label className="block text-sm mb-2">Existing system</label>
+              <select
+                className="w-full border rounded-lg p-2"
+                value={meta.existingSystem}
+                onChange={(e) => setMeta({ ...meta, existingSystem: e.target.value })}
+              >
+                <option>Unknown</option>
+                <option>Epoxy/PU</option>
+                <option>Antifouling</option>
+                <option>Silicone</option>
+              </select>
+            </div>
+
+            <div className="bg-white border rounded-2xl p-4 shadow-sm">
+              <button
+                onClick={submit}
+                className="w-full inline-flex justify-center items-center gap-2 rounded-xl px-4 py-2 font-semibold bg-slate-900 text-white hover:bg-slate-800"
+                disabled={loading}
+              >
+                {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                {loading ? "Analyzing" : "Analyze"}
+              </button>
+              {error && <p className="text-red-600 text-sm mt-2">{error}</p>}
+            </div>
+
+            <div className="bg-white border rounded-2xl p-4 shadow-sm">
+              <div className="flex items-center gap-2 mb-1">
+                <ShieldCheck className="w-4 h-4" />
+                <h3 className="font-semibold">Disclaimer</h3>
+              </div>
+              <p className="text-xs text-slate-600">
+                Experimental support tool. Always confirm with inspection and PPG TDS.
+              </p>
+            </div>
+          </aside>
+        </section>
 
         {/* --- Results --- */}
         {result && (
@@ -200,7 +393,43 @@ export default function App() {
               Estimated environment: <b>{result?.meta?.estimatedEnv || "-"}</b> · Used for rules:{" "}
               <b>{result?.meta?.effectiveEnv || "-"}</b>
             </p>
-            {/* risultati come prima */}
+            <div className="space-y-4 mt-2">
+              {result.items?.map((it, idx) => (
+                <div key={idx} className="bg-white border rounded-2xl p-4 shadow-sm">
+                  <div className="flex gap-4 items-start">
+                    <img
+                      src={files[idx]?.dataUrl || ""}
+                      alt="preview"
+                      className="w-32 h-32 object-cover rounded-xl border"
+                    />
+                    <div className="flex-1">
+                      <p className="text-sm text-slate-500">
+                        Defect: <span className="font-medium text-slate-800">{it.defect?.type}</span> · Severity:{" "}
+                        <span className="font-medium">{it.defect?.severity}</span> · Confidence:{" "}
+                        {Math.round((it.defect?.confidence || 0) * 100)}%
+                      </p>
+                      <p className="text-sm text-slate-500">AI Notes: {it.defect?.notes}</p>
+                      <div className="mt-2 p-3 bg-slate-50 rounded-xl border">
+                        <p className="text-sm font-semibold">Recommended cycle</p>
+                        <ul className="text-sm list-disc pl-5">
+                          {it.recommendation?.products?.map((p, i) => (
+                            <li key={i}>
+                              <span className="font-medium">{p.name}</span> · {p.dft} · {p.notes}
+                            </li>
+                          ))}
+                        </ul>
+                        {it.recommendation?.surfacePrep && (
+                          <p className="text-xs text-slate-600 mt-2">
+                            Surface prep: {it.recommendation.surfacePrep}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+
             <div className="mt-4">
               <button
                 onClick={askFromResults}
