@@ -1,7 +1,8 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Upload, Trash2, Send, ImageIcon, ShieldCheck, Loader2 } from "lucide-react";
 
 const MAX_FILES = 5;
+const STORAGE_KEY = "corrosionbot_chat_history_v1";
 
 export default function App() {
   const [files, setFiles] = useState([]);
@@ -17,11 +18,46 @@ export default function App() {
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
 
-  // Ask AI modal state
-  const [askOpen, setAskOpen] = useState(false);
-  const [askInput, setAskInput] = useState("");
-  const [askAnswer, setAskAnswer] = useState("");
+  // --- persistent chat state (pre-upload chat + Ask AI share the same history) ---
+  const [chatOpen, setChatOpen] = useState(true); // panel visible by default
+  const [messages, setMessages] = useState(() => {
+    try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"); } catch { return []; }
+  });
+  const [input, setInput] = useState("");
+  const [sending, setSending] = useState(false);
 
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(messages));
+  }, [messages]);
+
+  const sendChat = async () => {
+    if (!input.trim()) return;
+    const next = [...messages, { role: "user", content: input.trim() }];
+    setMessages(next);
+    setInput("");
+    setSending(true);
+    try {
+      const resp = await fetch("/.netlify/functions/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages: next, meta, lastResult: result }),
+      });
+      const json = await resp.json();
+      if (!resp.ok) throw new Error(json.error || `HTTP ${resp.status}`);
+      setMessages([...next, { role: "assistant", content: json.answer || "" }]);
+    } catch (e) {
+      setMessages([...next, { role: "assistant", content: `Error: ${e.message}` }]);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const clearChat = () => {
+    setMessages([]);
+    localStorage.removeItem(STORAGE_KEY);
+  };
+
+  // --- upload logic ---
   const onDrop = (ev) => {
     ev.preventDefault();
     handleFiles(ev.dataTransfer.files);
@@ -84,20 +120,12 @@ export default function App() {
     }
   };
 
-  const askAI = async () => {
-    try {
-      setAskAnswer("Asking...");
-      const resp = await fetch("/.netlify/functions/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: askInput, meta, lastResult: result }),
-      });
-      const json = await resp.json();
-      if (!resp.ok) throw new Error(json.error || `HTTP ${resp.status}`);
-      setAskAnswer(json.answer || "");
-    } catch (e) {
-      setAskAnswer(`Error: ${e.message}`);
-    }
+  // Ask AI button uses same history (so you can continue the convo from results)
+  const askFromResults = () => {
+    setChatOpen(true);
+    // Optional: prefill a hint
+    if (!input) setInput("Can you summarize the recommended cycle and surface prep steps?");
+    // bring panel into view (no-op here)
   };
 
   return (
@@ -112,6 +140,58 @@ export default function App() {
       </header>
 
       <main className="mx-auto max-w-5xl px-4 pb-24">
+        {/* --- Persistent Chat Panel (pre-upload) --- */}
+        <section className="mb-6">
+          <div className="bg-white border rounded-2xl shadow-sm">
+            <div className="flex items-center justify-between p-4">
+              <h2 className="font-semibold">Assistant Chat (English)</h2>
+              <div className="flex items-center gap-2">
+                <button onClick={() => setChatOpen(!chatOpen)} className="text-sm underline">
+                  {chatOpen ? "Hide" : "Show"}
+                </button>
+                <button onClick={clearChat} className="text-sm underline text-slate-600">
+                  Clear
+                </button>
+              </div>
+            </div>
+
+            {chatOpen && (
+              <div className="px-4 pb-4">
+                <div className="h-48 overflow-auto border rounded-xl p-3 bg-slate-50">
+                  {messages.length === 0 && (
+                    <p className="text-sm text-slate-500">Start a conversation about procedures, prep, recoat windows, compatibility, etc.</p>
+                  )}
+                  {messages.map((m, i) => (
+                    <div key={i} className={`mb-2 ${m.role === "assistant" ? "" : "text-right"}`}>
+                      <div className={`inline-block px-3 py-2 rounded-xl text-sm ${m.role === "assistant" ? "bg-white border" : "bg-slate-900 text-white"}`}>
+                        {m.content}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="mt-2 flex gap-2">
+                  <input
+                    className="flex-1 border rounded-xl px-3 py-2 text-sm"
+                    placeholder="Ask the assistant..."
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && sendChat()}
+                  />
+                  <button
+                    onClick={sendChat}
+                    disabled={sending}
+                    className="px-4 py-2 rounded-xl bg-slate-900 text-white font-semibold hover:bg-slate-800"
+                  >
+                    {sending ? "Sending..." : "Send"}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </section>
+
+        {/* --- Upload + Metadata --- */}
         <section className="grid md:grid-cols-3 gap-6">
           <div className="md:col-span-2">
             <div
@@ -197,6 +277,12 @@ export default function App() {
                 <option>Ballast Tank</option>
                 <option>Superstructure</option>
                 <option>Underwater Hull</option>
+                <option>Hatch Covers</option>
+                <option>Cargo Holds Dry</option>
+                <option>Internal Visible Steel</option>
+                <option>Internal Decks</option>
+                <option>Fresh/Drinking Water Tank</option>
+                <option>Heat Resistance</option>
               </select>
 
               <label className="block text-sm mb-2">Environment (ISO 12944)</label>
@@ -260,6 +346,7 @@ export default function App() {
           </aside>
         </section>
 
+        {/* --- Results --- */}
         {result && (
           <section className="mt-8">
             <h2 className="font-semibold mb-3">Results</h2>
@@ -297,6 +384,26 @@ export default function App() {
                             Surface prep: {it.recommendation.surfacePrep}
                           </p>
                         )}
+                        {it.recommendation?.notes && (
+                          <p className="text-xs text-slate-600 mt-1">{it.recommendation.notes}</p>
+                        )}
+                        {Array.isArray(it.recommendation?.alternatives) && it.recommendation.alternatives.length > 0 && (
+                          <div className="mt-2">
+                            <p className="text-sm font-semibold">Alternatives</p>
+                            <ul className="text-sm list-disc pl-5">
+                              {it.recommendation.alternatives.map((alt, k) => (
+                                <li key={k}>
+                                  {(alt.products || []).map((p, z) => (
+                                    <span key={z}>
+                                      <span className="font-medium">{p.name}</span>{z < (alt.products.length-1) ? " → " : ""}
+                                    </span>
+                                  ))}
+                                  {alt.note ? ` · ${alt.note}` : ""}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -306,46 +413,13 @@ export default function App() {
 
             <div className="mt-4">
               <button
-                onClick={() => {
-                  setAskOpen(true);
-                  setAskAnswer("");
-                }}
+                onClick={askFromResults}
                 className="px-4 py-2 rounded-xl bg-slate-900 text-white font-semibold hover:bg-slate-800"
               >
                 Ask AI
               </button>
             </div>
           </section>
-        )}
-
-        {askOpen && (
-          <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4">
-            <div className="bg-white rounded-2xl shadow-xl max-w-2xl w-full p-4">
-              <div className="flex items-center justify-between mb-2">
-                <h3 className="font-semibold">Ask AI (English)</h3>
-                <button onClick={() => setAskOpen(false)} className="text-slate-500">✕</button>
-              </div>
-              <textarea
-                className="w-full border rounded-lg p-2 h-28"
-                placeholder="Ask about procedures, surface prep, safety, overcoating windows..."
-                value={askInput}
-                onChange={(e) => setAskInput(e.target.value)}
-              />
-              <div className="mt-2 flex gap-2">
-                <button onClick={askAI} className="px-4 py-2 rounded-xl bg-slate-900 text-white font-semibold hover:bg-slate-800">
-                  Send
-                </button>
-                <button onClick={() => { setAskInput(""); setAskAnswer(""); }} className="px-4 py-2 rounded-xl border">
-                  Clear
-                </button>
-              </div>
-              {askAnswer && (
-                <pre className="mt-3 whitespace-pre-wrap text-sm bg-slate-50 p-3 rounded-xl border">
-                  {askAnswer}
-                </pre>
-              )}
-            </div>
-          </div>
         )}
       </main>
 
@@ -358,4 +432,3 @@ export default function App() {
     </div>
   );
 }
-
