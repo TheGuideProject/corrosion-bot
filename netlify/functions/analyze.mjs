@@ -3,122 +3,267 @@ const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 const SYSTEM_PROMPT = `You are a coatings inspector assistant. Always think and respond in English. Return ONLY valid JSON.
 For each image, infer: defect { type: one of [general_corrosion, pitting, blistering, delamination, mechanical_damage, fouling],
-severity: [minor, moderate, severe], confidence: 0..1, notes: short explanation with general information regarding the damage }.
-If unsure, type=general_corrosion, severity=moderate. Not Able to Verify, ASK PPG`;
+severity: [minor, moderate, severe], confidence: 0..1, notes: short explanation }.
+If unsure, type=general_corrosion, severity=moderate.`;
 
-/* ---------- Area-aware rule engine ---------- */
-
-// Reusable product blocks
+/* ---------- Product blocks from user's spec (PDF) ---------- */
+/* Notes: values & product names reflect user's provided cycles. */
 const BLOCKS = {
-  ballast: { name: "Sigmaprime 200", dft: "160 µm x2 coat + stripe coat x2 75 µm )", notes: "stripe coat edges/welds and any other area subject to heavy corrosion, ask ai to have more information" },
-  primer200: { name: "Sigmaprime 200", dft: "125 µm (2x)", notes: "Universal epoxy anticorrosive primer, based upon pure epoxy technology " },
-  intermedio350: { name: "Sigmacover 350", dft: "125 µm (1x)", notes: "anticorrosive intermediate" },
-  intermedio380: { name: "Sigmacover 380", dft: "125 µm (1x)", notes: "barrier/rebuild" },
-  finitura550: { name: "Sigmadur 550", dft: "50 µm (1x)", notes: "polyurethane finish" },
-  primerRapido28: { name: "Sigmarine 28", dft: "75 µm (1x)", notes: "fast drying primer" },
+  // Core products
+  sigmaprime200_100_200: { name: "Sigmaprime 200", dft: "100–200 µm", notes: "immersion-capable epoxy per spec" },
+  sigmaprime200_320_total: { name: "Sigmaprime 200", dft: "320 µm total", notes: "IMO PSPC target; include 75–100 µm stripe per layer" },
+  sigmacover350_2x125: { name: "Sigmacover 350", dft: "2×125 µm", notes: "cheaper/easier alternative per spec" },
+  sigmacover350_125: { name: "Sigmacover 350", dft: "125 µm (1x)", notes: "intermediate anticorrosive" },
+  sigmacover456_75: { name: "Sigmacover 456", dft: "75 µm", notes: "epoxy; choose based on existing finish compatibility" },
+  sigmadur550_50_60: { name: "Sigmadur 550", dft: "50–60 µm", notes: "polyurethane; UV resistant; not for immersion" },
+  sigmarine48_1x35: { name: "Sigmarine 48", dft: "35 µm (1x)", notes: "alkyd; choice depends on old finish" },
+  sigmarine48_2x35: { name: "Sigmarine 48", dft: "2×35 µm", notes: "alkyd; choice depends on old finish" },
+  sigmarine28_75: { name: "Sigmarine 28", dft: "75 µm", notes: "fast-dry primer for internals" },
+  // Tanks
+  sigmaguardCSF585_250_400: { name: "Sigmaguard CSF 585", dft: "250–400 µm", notes: "fresh/drinking water tank; white available" },
+  // Heat
+  sigmatherm500_25: { name: "Sigmatherm 500 Aluminium", dft: "25 µm", notes: "> 250°C service" },
+  sigmatherm175_25: { name: "Sigmatherm 175", dft: "25 µm", notes: "< 175°C service" },
+  // AF/immersion extras for generic underwater
   antifouling: { name: "Ecofleet 530", dft: "see TDS", notes: "antifouling; verify tie-coat" },
-  immersionEpoxy: { name: "Sigmaprime 200", dft: "125 µm (2x)", notes: "Universal epoxy anticorrosive primer, based upon pure epoxy technology " },
-  deckNonSkid: { name: "Aggregate broadcast", dft: "—", notes: "non-skid system with aggregate" },
+  immersion_build_2x200: { name: "Sigmashield 1200", dft: "2×200 µm", notes: "immersion-grade high-build epoxy" },
+  stripe_456_100: { name: "Sigmacover 456", dft: "100 µm (stripe)", notes: "stripe coat edges/welds" },
 };
 
-// Decide cycle from area + defect + env
-function cycleFor({ area, defectType, env }) {
-  area = (area || "").toLowerCase();
-  const atm = ["C3", "C4", "C5I", "C5M", "CX"].includes(env) ? env : "C4";
+/* ---------- Area + defect + environment logic ---------- */
+/* Areas we recognize from UI: Hull/Topside, Deck, Ballast Tank, Superstructure, Underwater Hull
+   We also support optional text matches for: External Deck, Main Deck, Hatch Covers, Cargo Holds, Internal Decks,
+   Internal Visible Steel, Fresh/Drinking Water Tank, Heat Resistance. */
 
-  // UNDERWATER HULL (immersion + AF)
-  if (area.includes("underwater")) {
-    if (defectType === "fouling") {
+function norm(s) { return (s || "").toLowerCase(); }
+
+function cycleFromUserSpec({ area, defectType, env }) {
+  const a = norm(area);
+  const t = defectType || "general_corrosion";
+  const severe = ["C5M", "C5I", "CX"].includes(env);
+
+  // --- WATER / SPECIAL TANKS (explicit keywords in "area") ---
+  if (a.includes("fresh") || a.includes("drinking")) {
+    return {
+      surfacePrep: "Surface cleaning, salt removal, appropriate profile for tank lining.",
+      products: [BLOCKS.sigmaguardCSF585_250_400],
+    };
+  }
+
+  if (a.includes("ballast")) {
+    // From PDF: 3× Sigmaprime 200 tot 320 µm; stripe 75–100 µm/layer
+    // Small or big repairs share same approach in doc.
+    const base = [
+      BLOCKS.sigmaprime200_320_total
+    ];
+    // If you want to show layers explicitly, you can expand to three items with DFT per layer.
+    if (t === "pitting") {
       return {
-        surfacePrep: "UW cleaning, remove biological fouling; light sanding; ensure compatibility.",
+        surfacePrep: "Sa 2.5 where feasible or St 3 spot; soluble salts removal; stripe on edges/welds.",
+        products: [BLOCKS.stripe_456_100, ...base],
+      };
+    }
+    if (t === "blistering" || t === "delamination") {
+      return {
+        surfacePrep: "Remove non-adherent coating; feather edges; wash; seal; chloride check.",
+        products: base,
+      };
+    }
+    return {
+      surfacePrep: "Sa 2.5 (preferable) or St 3 spot; stripe coating as needed; salts removal.",
+      products: base,
+    };
+  }
+
+  // --- HEAT RESISTANCE (engine/stack/etc.) ---
+  if (a.includes("heat")) {
+    // Let user choose temp band; here we suggest both options from doc
+    return {
+      surfacePrep: "Prepare according to TDS; ensure heat-stable substrate and cleanliness.",
+      products: [BLOCKS.sigmatherm500_25, BLOCKS.sigmatherm175_25],
+    };
+  }
+
+  // --- UNDERWATER HULL (generic AF + immersion epoxy for breakdown) ---
+  if (a.includes("underwater")) {
+    if (t === "fouling") {
+      return {
+        surfacePrep: "UW cleaning; remove biological fouling; light sanding; check AF compatibility.",
         products: [BLOCKS.antifouling],
       };
     }
     return {
-      surfacePrep: "High-pressure wash; mechanical prep; remove salts; ISO 8501 profile.",
-      products: [BLOCKS.immersionEpoxy, BLOCKS.antifouling],
+      surfacePrep: "HP wash; mechanical prep; remove salts; immersion-capable build where coating breakdown exists.",
+      products: [BLOCKS.immersion_build_2x200, BLOCKS.antifouling],
     };
   }
 
-  // BALLAST TANK (immersion-like)
-  if (area.includes("ballast")) {
-    return {
-      surfacePrep: "Sa 2.5 blasting (if feasible) or St 3 spot; chloride removal; stripe on edges/welds.",
-      products: defectType === "pitting" ? [BLOCKS.ballast, BLOCKS.immersionEpoxy] : [BLOCKS.immersionEpoxy],
-    };
-  }
+  // --- DECKS (MAIN/EXTERNAL) & HATCH COVERS per PDF ---
+  if (a.includes("deck") || a.includes("hatch")) {
+    // Preferred cycle (from PDF): 2× Sigmaprime 200 (100–200 µm) + finish
+    const base = [BLOCKS.sigmaprime200_100_200, BLOCKS.sigmaprime200_100_200];
+    // Finish choice note: PU vs Epoxy vs Alkyd depends on existing finish
+    const finishChoices = [
+      BLOCKS.sigmadur550_50_60,
+      BLOCKS.sigmacover456_75,
+      BLOCKS.sigmarine48_1x35, // or 2x35
+    ];
 
-  // DECK (robust + optional non-skid)
-  if (area.includes("deck")) {
-    if (defectType === "mechanical_damage") {
+    // Cheaper alternative: 2× Sigmacover 350 (2x125)
+    const cheaper = [BLOCKS.sigmacover350_2x125];
+
+    if (t === "mechanical_damage") {
       return {
-        surfacePrep: "Sanding/roughening; restore profile; clean and degrease.",
-        products: [BLOCKS.primer200, BLOCKS.finitura550, BLOCKS.deckNonSkid],
+        surfacePrep: "Sanding/roughening; degrease; local profile restoration.",
+        products: [...base, finishChoices[0]],
+        alt: { products: cheaper, note: "Cheaper/easier alternative" },
       };
     }
-    if (defectType === "blistering" || defectType === "delamination") {
+    if (t === "blistering" || t === "delamination") {
       return {
-        surfacePrep: "Remove defective coating; feather edges; wash; seal; stripe where needed.",
-        products: [BLOCKS.intermedio380, BLOCKS.finitura550, BLOCKS.deckNonSkid],
+        surfacePrep: "Remove blisters/delamination; feather edges; wash; seal; compatibility disclaimer with existing finish.",
+        products: [...base, finishChoices[0]],
+        notes: "Finish choice depends on old finish (PU vs Epoxy vs Alkyd).",
+        alternatives: [
+          { products: [...base, finishChoices[1]] },
+          { products: [...base, BLOCKS.sigmarine48_2x35] },
+          { products: cheaper, note: "Cheaper/easier cycle" },
+        ],
       };
     }
+    // general_corrosion / pitting (add stripe if pitting)
+    const start = t === "pitting" ? [BLOCKS.stripe_456_100, ...base] : base;
     return {
-      surfacePrep: "Local St 3; stripe on edges/welds; salt removal; restore profile.",
-      products:
-        defectType === "pitting"
-          ? [BLOCKS.stripe, BLOCKS.intermedio350, BLOCKS.finitura550, BLOCKS.deckNonSkid]
-          : [BLOCKS.intermedio350, BLOCKS.finitura550, BLOCKS.deckNonSkid],
+      surfacePrep: "Local St 3; remove salts; stripe on edges/welds where needed.",
+      products: [...start, finishChoices[0]],
+      notes: "Finish choice depends on old finish (PU vs Epoxy vs Alkyd).",
+      alternatives: [
+        { products: [...start, finishChoices[1]] },
+        { products: [...start, BLOCKS.sigmarine48_2x35] },
+        { products: cheaper, note: "Cheaper/easier cycle" },
+      ],
     };
   }
 
-  // HULL/TOPSIDE or SUPERSTRUCTURE (atmospheric C3..CX)
-  if (area.includes("hull") || area.includes("topside") || area.includes("superstructure")) {
-    const useBarrier = atm === "C5M" || atm === "C5I" || atm === "CX";
+  // --- SUPERSTRUCTURE esterna per PDF ---
+  if (a.includes("superstructure")) {
+    const base = [BLOCKS.sigmaprime200_100_200, BLOCKS.sigmaprime200_100_200];
+    const finishOptions = [
+      BLOCKS.sigmadur550_50_60,
+      BLOCKS.sigmarine48_1x35, // or 2x35 as needed
+    ];
+    if (t === "pitting") {
+      return {
+        surfacePrep: "St 3; stripe on edges/welds; remove salts.",
+        products: [BLOCKS.stripe_456_100, ...base, finishOptions[0]],
+        alternatives: [{ products: [...base, BLOCKS.sigmarine48_2x35] }],
+        notes: "Finish choice depends on old finish (PU vs Alkyd).",
+      };
+    }
+    if (t === "blistering" || t === "delamination") {
+      return {
+        surfacePrep: "Remove defective coating; feather edges; wash; seal.",
+        products: [...base, finishOptions[0]],
+        alternatives: [{ products: [...base, BLOCKS.sigmarine48_2x35] }],
+      };
+    }
+    return {
+      surfacePrep: "Local St 3; salts removal.",
+      products: [...base, finishOptions[0]],
+      alternatives: [{ products: [...base, BLOCKS.sigmarine48_2x35] }],
+    };
+  }
 
-    if (defectType === "blistering" || defectType === "delamination") {
+  // --- CARGO HOLDS (dry) per PDF ---
+  if (a.includes("cargo") || a.includes("hold")) {
+    const base = [BLOCKS.sigmaprime200_100_200, BLOCKS.sigmaprime200_100_200];
+    const finishChoices = [
+      BLOCKS.sigmadur550_50_60,
+      BLOCKS.sigmacover456_75,
+      BLOCKS.sigmarine48_1x35,
+    ];
+    const cheaper = [BLOCKS.sigmacover350_2x125];
+    if (t === "pitting") {
+      return {
+        surfacePrep: "St 3; stripe edges/welds.",
+        products: [BLOCKS.stripe_456_100, ...base, finishChoices[0]],
+        alternatives: [
+          { products: [...base, finishChoices[1]] },
+          { products: [...base, BLOCKS.sigmarine48_2x35] },
+          { products: cheaper, note: "Cheaper/easier cycle" },
+        ],
+      };
+    }
+    return {
+      surfacePrep: "Remove contamination; local St 3; salts removal.",
+      products: [...base, finishChoices[0]],
+      alternatives: [
+        { products: [...base, finishChoices[1]] },
+        { products: [...base, BLOCKS.sigmarine48_2x35] },
+        { products: cheaper, note: "Cheaper/easier cycle" },
+      ],
+    };
+  }
+
+  // --- INTERNAL visible steel / internal decks per PDF ---
+  if (a.includes("internal")) {
+    // Visible steel:
+    if (a.includes("visible")) {
+      return {
+        surfacePrep: "Cleaning; light abrasion as needed.",
+        products: [BLOCKS.sigmarine28_75, BLOCKS.sigmarine48_1x35],
+      };
+    }
+    // Internal decks:
+    if (a.includes("deck")) {
+      return {
+        surfacePrep: "Clean; light sanding where needed; respect recoat windows.",
+        products: [BLOCKS.sigmarine28_75, BLOCKS.sigmarine48_1x35],
+        notes: "Recoat windows: Sigmarine 28 (8h/4h/3h), Sigmarine 48 (24h/16h/16h) as per doc.",
+      };
+    }
+  }
+
+  // --- Hull/Topside generic (fallback if user picked that) ---
+  if (a.includes("hull") || a.includes("topside")) {
+    // Use a conservative atmospheric cycle if not matched above
+    if (t === "pitting") {
+      return {
+        surfacePrep: "St 3; stripe on edges/welds; remove salts.",
+        products: [BLOCKS.stripe_456_100, BLOCKS.sigmacover350_125, BLOCKS.sigmadur550_50_60],
+      };
+    }
+    if (t === "blistering" || t === "delamination") {
       return {
         surfacePrep: "Remove blisters/delamination; feather edges; wash; seal.",
-        products: [useBarrier ? BLOCKS.intermedio380 : BLOCKS.intermedio350, BLOCKS.finitura550],
-      };
-    }
-    if (defectType === "mechanical_damage") {
-      return { surfacePrep: "Sanding/roughening; spot repair; clean.", products: [BLOCKS.primerRapido28, BLOCKS.finitura550] };
-    }
-    if (defectType === "pitting") {
-      return {
-        surfacePrep: "St 3; stripe on edges/welds; salt removal.",
-        products: [BLOCKS.stripe, useBarrier ? BLOCKS.intermedio380 : BLOCKS.intermedio350, BLOCKS.finitura550],
+        products: [BLOCKS.sigmacover350_125, BLOCKS.sigmadur550_50_60],
       };
     }
     return {
-      surfacePrep: "Local St 3; remove salts/contaminants; restore profiles.",
-      products: [useBarrier ? BLOCKS.intermedio380 : BLOCKS.intermedio350, BLOCKS.finitura550],
+      surfacePrep: "Local St 3; remove salts/contaminants; restore profile.",
+      products: [BLOCKS.sigmacover350_125, BLOCKS.sigmadur550_50_60],
     };
   }
 
-  // Fallback
-  return { surfacePrep: "Surface cleaning; St 3 local; remove salts.", products: [BLOCKS.intermedio350, BLOCKS.finitura550] };
+  // Final fallback
+  return {
+    surfacePrep: "Surface cleaning; St 3 local; saline contamination removal.",
+    products: [BLOCKS.sigmacover350_125, BLOCKS.sigmadur550_50_60],
+  };
 }
 
 function pickCycle(defectType, env, area) {
-  return cycleFor({ area, defectType, env });
+  return cycleFromUserSpec({ area, defectType, env });
 }
 
 /* ---------- Helpers ---------- */
-
+// Heuristic environment (simple; you can replace with robust async version later)
 function estimateEnvFromGeo(meta) {
   const loc = (meta?.location || "").toLowerCase();
-  let distCoastKm = 10;
-  if (/porto|port|marina|banchina|dock|harbor/.test(loc)) distCoastKm = 0.5;
-
-  const isIndustrial = /zona industriale|raffineria|steel|shipyard|cantiere|impianto|plant|terminal/.test(loc);
-
-  let env = "C3";
-  if (distCoastKm <= 1) env = "C5M";
-  else if (distCoastKm <= 20) env = "C4";
-
-  if (isIndustrial) env = env === "C3" ? "C4" : env === "C4" ? "C5I" : env;
-  if (/offshore|piattaforma|splash zone|breakwater/.test(loc)) env = "CX";
+  let env = "C4";
+  if (/offshore|splash zone|piattaforma|breakwater/.test(loc)) return "CX";
+  if (/porto|port|marina|banchina|dock|harbor/.test(loc)) env = "C5M";
+  if (/zona industriale|raffineria|steel|shipyard|cantiere|impianto|plant|terminal/.test(loc)) env = env === "C4" ? "C5I" : env;
   return env;
 }
 
@@ -130,7 +275,7 @@ function cors() {
   };
 }
 
-/* ---------- Netlify function (Lambda style) ---------- */
+/* ---------- Netlify function ---------- */
 export const handler = async (event) => {
   if (event.httpMethod === "OPTIONS") return { statusCode: 204, headers: cors() };
   if (event.httpMethod !== "POST") return { statusCode: 405, headers: cors(), body: "Method Not Allowed" };
@@ -166,18 +311,23 @@ export const handler = async (event) => {
       parsed = match ? JSON.parse(match[0]) : { items: [] };
     }
 
-    const items = (parsed.items || images.map(() => ({ defect: { type: "general_corrosion", severity: "moderate", confidence: 0.5, notes: "default" } })))
+    const items = (parsed.items || images.map(() => ({
+      defect: { type: "general_corrosion", severity: "moderate", confidence: 0.5, notes: "default" }
+    })))
       .slice(0, images.length)
       .map((it) => ({
         defect: it.defect,
         recommendation: pickCycle(it.defect?.type, effectiveEnv, meta?.area),
       }));
 
-    const payload = { meta: { ...meta, estimatedEnv, effectiveEnv }, items, disclaimer: "AI output is non-binding; always verify with TDS/PSDS and real inspection." };
+    const payload = {
+      meta: { ...meta, estimatedEnv, effectiveEnv },
+      items,
+      disclaimer: "AI output is non-binding; always verify with TDS/PSDS and real inspection.",
+    };
 
     return { statusCode: 200, headers: { ...cors(), "Content-Type": "application/json" }, body: JSON.stringify(payload) };
   } catch (err) {
     return { statusCode: 500, headers: { ...cors(), "Content-Type": "application/json" }, body: JSON.stringify({ error: err?.message || "Internal error" }) };
   }
 };
-
