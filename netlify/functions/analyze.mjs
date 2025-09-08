@@ -11,8 +11,7 @@ If unsure, type=general_corrosion, severity=moderate. Not Able to Verify, ASK PP
 // Reusable product blocks
 const BLOCKS = {
   ballast: { name: "Sigmaprime 200", dft: "160 µm x2 coat + stripe coat x2 75 µm )", notes: "stripe coat edges/welds and any other area subject to heavy corrosion, ask ai to have more information" },
-  Primer200: { name: "Sigmaprime 200", dft: "125 µm (2x)", notes: "Universal epoxy anticorrosive primer, based upon pure epoxy technology
-" },
+  Primer200: { name: "Sigmaprime 200", dft: "125 µm (2x)", notes: "Universal epoxy anticorrosive primer, based upon pure epoxy technology " },
   intermedio350: { name: "Sigmacover 350", dft: "125 µm (1x)", notes: "anticorrosive intermediate" },
   intermedio380: { name: "Sigmacover 380", dft: "125 µm (1x)", notes: "barrier/rebuild" },
   finitura550: { name: "Sigmadur 550", dft: "50 µm (1x)", notes: "polyurethane finish" },
