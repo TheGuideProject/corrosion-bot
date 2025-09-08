@@ -323,9 +323,7 @@ export default function App() {
             <div className="bg-white rounded-2xl shadow-xl max-w-2xl w-full p-4">
               <div className="flex items-center justify-between mb-2">
                 <h3 className="font-semibold">Ask AI (English)</h3>
-                <button onClick={() => setAskOpen(false)} className="text-slate-500">
-                  ✕
-                </button>
+                <button onClick={() => setAskOpen(false)} className="text-slate-500">✕</button>
               </div>
               <textarea
                 className="w-full border rounded-lg p-2 h-28"
@@ -334,19 +332,10 @@ export default function App() {
                 onChange={(e) => setAskInput(e.target.value)}
               />
               <div className="mt-2 flex gap-2">
-                <button
-                  onClick={askAI}
-                  className="px-4 py-2 rounded-xl bg-slate-900 text-white font-semibold hover:bg-slate-800"
-                >
+                <button onClick={askAI} className="px-4 py-2 rounded-xl bg-slate-900 text-white font-semibold hover:bg-slate-800">
                   Send
                 </button>
-                <button
-                  onClick={() => {
-                    setAskInput("");
-                    setAskAnswer("");
-                  }}
-                  className="px-4 py-2 rounded-xl border"
-                >
+                <button onClick={() => { setAskInput(""); setAskAnswer(""); }} className="px-4 py-2 rounded-xl border">
                   Clear
                 </button>
               </div>
@@ -369,3 +358,4 @@ export default function App() {
     </div>
   );
 }
+
