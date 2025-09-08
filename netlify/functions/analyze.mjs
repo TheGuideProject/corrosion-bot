@@ -3,14 +3,16 @@ const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 const SYSTEM_PROMPT = `You are a coatings inspector assistant. Always think and respond in English. Return ONLY valid JSON.
 For each image, infer: defect { type: one of [general_corrosion, pitting, blistering, delamination, mechanical_damage, fouling],
-severity: [minor, moderate, severe], confidence: 0..1, notes: short explanation }.
-If unsure, type=general_corrosion, severity=moderate.`;
+severity: [minor, moderate, severe], confidence: 0..1, notes: short explanation with general information regarding the damage }.
+If unsure, type=general_corrosion, severity=moderate. Not Able to Verify, ASK PPG`;
 
 /* ---------- Area-aware rule engine ---------- */
 
 // Reusable product blocks
 const BLOCKS = {
-  stripe: { name: "Sigmacover 456", dft: "100 µm (stripe)", notes: "stripe coat edges/welds" },
+  ballast: { name: "Sigmaprime 200", dft: "160 µm x2 coat + stripe coat x2 75 µm )", notes: "stripe coat edges/welds and any other area subject to heavy corrosion, ask ai to have more information" },
+  Primer200: { name: "Sigmaprime 200", dft: "125 µm (2x)", notes: "Universal epoxy anticorrosive primer, based upon pure epoxy technology
+" },
   intermedio350: { name: "Sigmacover 350", dft: "125 µm (1x)", notes: "anticorrosive intermediate" },
   intermedio380: { name: "Sigmacover 380", dft: "125 µm (1x)", notes: "barrier/rebuild" },
   finitura550: { name: "Sigmadur 550", dft: "50 µm (1x)", notes: "polyurethane finish" },
@@ -43,7 +45,7 @@ function cycleFor({ area, defectType, env }) {
   if (area.includes("ballast")) {
     return {
       surfacePrep: "Sa 2.5 blasting (if feasible) or St 3 spot; chloride removal; stripe on edges/welds.",
-      products: defectType === "pitting" ? [BLOCKS.stripe, BLOCKS.immersionEpoxy] : [BLOCKS.immersionEpoxy],
+      products: defectType === "pitting" ? [BLOCKS.ballast, BLOCKS.immersionEpoxy] : [BLOCKS.immersionEpoxy],
     };
   }
 
