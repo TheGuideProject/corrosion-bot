@@ -6,60 +6,105 @@ For each image, infer: defect { type: one of [general_corrosion, pitting, bliste
 severity: [minor, moderate, severe], confidence: 0..1, notes: short explanation }.
 If unsure, type=general_corrosion, severity=moderate.`;
 
-// Demo product library; replace with your internal DB mapping.
-const LIB = {
-  cycles: {
-    general_corrosion: ({ env }) => ({
-      surfacePrep: "Local St 3, removal of salts/contaminants, restore profiles",
-      products: [
-        { name: "Sigmacover 350", dft: "125 µm (1x)", notes: "anticorrosive intermediate" },
-        { name: "Sigmadur 550", dft: "50 µm (1x)", notes: "polyurethane finish" },
-      ],
-    }),
-    pitting: ({ env }) => ({
-      surfacePrep: "St 3, stripe coat on edges/welds, fill cavities",
-      products: [
-        { name: "Sigmacover 456", dft: "100 µm (stripe)", notes: "high solids for critical points" },
-        { name: "Sigmacover 350", dft: "125 µm (1x)", notes: "full coat" },
-        { name: "Sigmadur 550", dft: "50 µm (1x)", notes: "finish" },
-      ],
-    }),
-    blistering: ({ env }) => ({
-      surfacePrep: "Remove blisters, feather edges, wash, seal",
-      products: [
-        { name: "Sigmacover 380", dft: "125 µm (1x)", notes: "barrier/rebuild" },
-        { name: "Sigmadur 550", dft: "50 µm (1x)", notes: "finish" },
-      ],
-    }),
-    delamination: ({ env }) => ({
-      surfacePrep: "Remove non-adherent coating, St 3 prep",
-      products: [
-        { name: "Sigmacover 350", dft: "150 µm (1x)", notes: "film rebuild" },
-        { name: "Sigmadur 550", dft: "50 µm (1x)", notes: "finish" },
-      ],
-    }),
-    mechanical_damage: ({ env }) => ({
-      surfacePrep: "Sanding/roughening, restore profile",
-      products: [
-        { name: "Sigmarine 28", dft: "75 µm (1x)", notes: "fast drying primer" },
-        { name: "Sigmadur 550", dft: "50 µm (1x)", notes: "finish" },
-      ],
-    }),
-    fouling: ({ env }) => ({
-      surfacePrep: "UW cleaning, remove fouling, light sanding",
-      products: [
-        { name: "Ecofleet 530", dft: "see TDS", notes: "antifouling; verify tie-coat compatibility" },
-      ],
-    }),
-  },
+/* ---------- Area-aware rule engine ---------- */
+
+// Reusable product blocks
+const BLOCKS = {
+  stripe: { name: "Sigmacover 456", dft: "100 µm (stripe)", notes: "stripe coat edges/welds" },
+  intermedio350: { name: "Sigmacover 350", dft: "125 µm (1x)", notes: "anticorrosive intermediate" },
+  intermedio380: { name: "Sigmacover 380", dft: "125 µm (1x)", notes: "barrier/rebuild" },
+  finitura550: { name: "Sigmadur 550", dft: "50 µm (1x)", notes: "polyurethane finish" },
+  primerRapido28: { name: "Sigmarine 28", dft: "75 µm (1x)", notes: "fast drying primer" },
+  antifouling: { name: "Ecofleet 530", dft: "see TDS", notes: "antifouling; verify tie-coat" },
+  immersionEpoxy: { name: "Sigmashield 1200", dft: "2×200 µm", notes: "immersion-grade epoxy" },
+  deckNonSkid: { name: "Aggregate broadcast", dft: "—", notes: "non-skid system with aggregate" },
 };
 
-function pickCycle(defectType, env) {
-  const fn = LIB.cycles[defectType] || LIB.cycles.general_corrosion;
-  return fn({ env });
+// Decide cycle from area + defect + env
+function cycleFor({ area, defectType, env }) {
+  area = (area || "").toLowerCase();
+  const atm = ["C3", "C4", "C5I", "C5M", "CX"].includes(env) ? env : "C4";
+
+  // UNDERWATER HULL (immersion + AF)
+  if (area.includes("underwater")) {
+    if (defectType === "fouling") {
+      return {
+        surfacePrep: "UW cleaning, remove biological fouling; light sanding; ensure compatibility.",
+        products: [BLOCKS.antifouling],
+      };
+    }
+    return {
+      surfacePrep: "High-pressure wash; mechanical prep; remove salts; ISO 8501 profile.",
+      products: [BLOCKS.immersionEpoxy, BLOCKS.antifouling],
+    };
+  }
+
+  // BALLAST TANK (immersion-like)
+  if (area.includes("ballast")) {
+    return {
+      surfacePrep: "Sa 2.5 blasting (if feasible) or St 3 spot; chloride removal; stripe on edges/welds.",
+      products: defectType === "pitting" ? [BLOCKS.stripe, BLOCKS.immersionEpoxy] : [BLOCKS.immersionEpoxy],
+    };
+  }
+
+  // DECK (robust + optional non-skid)
+  if (area.includes("deck")) {
+    if (defectType === "mechanical_damage") {
+      return {
+        surfacePrep: "Sanding/roughening; restore profile; clean and degrease.",
+        products: [BLOCKS.primerRapido28, BLOCKS.finitura550, BLOCKS.deckNonSkid],
+      };
+    }
+    if (defectType === "blistering" || defectType === "delamination") {
+      return {
+        surfacePrep: "Remove defective coating; feather edges; wash; seal; stripe where needed.",
+        products: [BLOCKS.intermedio380, BLOCKS.finitura550, BLOCKS.deckNonSkid],
+      };
+    }
+    return {
+      surfacePrep: "Local St 3; stripe on edges/welds; salt removal; restore profile.",
+      products:
+        defectType === "pitting"
+          ? [BLOCKS.stripe, BLOCKS.intermedio350, BLOCKS.finitura550, BLOCKS.deckNonSkid]
+          : [BLOCKS.intermedio350, BLOCKS.finitura550, BLOCKS.deckNonSkid],
+    };
+  }
+
+  // HULL/TOPSIDE or SUPERSTRUCTURE (atmospheric C3..CX)
+  if (area.includes("hull") || area.includes("topside") || area.includes("superstructure")) {
+    const useBarrier = atm === "C5M" || atm === "C5I" || atm === "CX";
+
+    if (defectType === "blistering" || defectType === "delamination") {
+      return {
+        surfacePrep: "Remove blisters/delamination; feather edges; wash; seal.",
+        products: [useBarrier ? BLOCKS.intermedio380 : BLOCKS.intermedio350, BLOCKS.finitura550],
+      };
+    }
+    if (defectType === "mechanical_damage") {
+      return { surfacePrep: "Sanding/roughening; spot repair; clean.", products: [BLOCKS.primerRapido28, BLOCKS.finitura550] };
+    }
+    if (defectType === "pitting") {
+      return {
+        surfacePrep: "St 3; stripe on edges/welds; salt removal.",
+        products: [BLOCKS.stripe, useBarrier ? BLOCKS.intermedio380 : BLOCKS.intermedio350, BLOCKS.finitura550],
+      };
+    }
+    return {
+      surfacePrep: "Local St 3; remove salts/contaminants; restore profiles.",
+      products: [useBarrier ? BLOCKS.intermedio380 : BLOCKS.intermedio350, BLOCKS.finitura550],
+    };
+  }
+
+  // Fallback
+  return { surfacePrep: "Surface cleaning; St 3 local; remove salts.", products: [BLOCKS.intermedio350, BLOCKS.finitura550] };
 }
 
-// simple geo heuristic for demo
+function pickCycle(defectType, env, area) {
+  return cycleFor({ area, defectType, env });
+}
+
+/* ---------- Helpers ---------- */
+
 function estimateEnvFromGeo(meta) {
   const loc = (meta?.location || "").toLowerCase();
   let distCoastKm = 10;
@@ -72,7 +117,6 @@ function estimateEnvFromGeo(meta) {
   else if (distCoastKm <= 20) env = "C4";
 
   if (isIndustrial) env = env === "C3" ? "C4" : env === "C4" ? "C5I" : env;
-
   if (/offshore|piattaforma|splash zone|breakwater/.test(loc)) env = "CX";
   return env;
 }
@@ -85,27 +129,19 @@ function cors() {
   };
 }
 
-// ✅ Netlify expects a named export called `handler`
+/* ---------- Netlify function (Lambda style) ---------- */
 export const handler = async (event) => {
-  if (event.httpMethod === "OPTIONS") {
-    return { statusCode: 204, headers: cors() };
-  }
-  if (event.httpMethod !== "POST") {
-    return { statusCode: 405, headers: cors(), body: "Method Not Allowed" };
-  }
+  if (event.httpMethod === "OPTIONS") return { statusCode: 204, headers: cors() };
+  if (event.httpMethod !== "POST") return { statusCode: 405, headers: cors(), body: "Method Not Allowed" };
 
   try {
     const { images, meta } = JSON.parse(event.body || "{}");
     if (!Array.isArray(images) || images.length === 0) {
-      return {
-        statusCode: 400,
-        headers: { ...cors(), "Content-Type": "application/json" },
-        body: JSON.stringify({ error: "No images" }),
-      };
+      return { statusCode: 400, headers: { ...cors(), "Content-Type": "application/json" }, body: JSON.stringify({ error: "No images" }) };
     }
 
     const estimatedEnv = estimateEnvFromGeo(meta);
-    const effectiveEnv = (meta?.environment && meta.environment !== "Auto") ? meta.environment : estimatedEnv;
+    const effectiveEnv = meta?.environment && meta.environment !== "Auto" ? meta.environment : estimatedEnv;
 
     const userContent = [
       { type: "text", text: `Analyze the images for corrosion or coating breakdown. Metadata: area=${meta?.area}, env=${effectiveEnv}, substrate=${meta?.substrate}, existing=${meta?.existingSystem}. Return a compact JSON with items[].defect{type,severity,confidence,notes}. Respond in English only.` },
@@ -133,25 +169,14 @@ export const handler = async (event) => {
       .slice(0, images.length)
       .map((it) => ({
         defect: it.defect,
-        recommendation: pickCycle(it.defect?.type, effectiveEnv),
+        recommendation: pickCycle(it.defect?.type, effectiveEnv, meta?.area),
       }));
 
-    const payload = {
-      meta: { ...meta, estimatedEnv, effectiveEnv },
-      items,
-      disclaimer: "AI output is non-binding; always verify with TDS/PSDS and real inspection.",
-    };
+    const payload = { meta: { ...meta, estimatedEnv, effectiveEnv }, items, disclaimer: "AI output is non-binding; always verify with TDS/PSDS and real inspection." };
 
-    return {
-      statusCode: 200,
-      headers: { ...cors(), "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    };
+    return { statusCode: 200, headers: { ...cors(), "Content-Type": "application/json" }, body: JSON.stringify(payload) };
   } catch (err) {
-    return {
-      statusCode: 500,
-      headers: { ...cors(), "Content-Type": "application/json" },
-      body: JSON.stringify({ error: err?.message || "Internal error" }),
-    };
+    return { statusCode: 500, headers: { ...cors(), "Content-Type": "application/json" }, body: JSON.stringify({ error: err?.message || "Internal error" }) };
   }
 };
+
