@@ -58,7 +58,7 @@ export default function App() {
     localStorage.removeItem(STORAGE_KEY);
   };
 
-  // upload logic
+  // upload
   const onDrop = (ev) => {
     ev.preventDefault();
     handleFiles(ev.dataTransfer.files);
@@ -93,47 +93,93 @@ export default function App() {
 
   const removeAt = (idx) => setFiles((prev) => prev.filter((_, i) => i !== idx));
 
-  // camera live preview
+  // fotocamera con anteprima live
   const [cameraOpen, setCameraOpen] = useState(false);
+  const [camError, setCamError] = useState("");
   const videoRef = useRef(null);
   const streamRef = useRef(null);
 
-  const startCamera = async () => {
+  async function getStreamWithFallback() {
+    // 1) prova posteriore
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: "environment" } }
+      return await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: "environment" } },
+        audio: false,
       });
+    } catch {}
+    // 2) prova senza facingMode
+    try {
+      return await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    } catch (err) {
+      throw err;
+    }
+  }
+
+  const startCamera = async () => {
+    setCamError("");
+    try {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        throw new Error("Camera API not supported in this browser.");
+      }
+      const stream = await getStreamWithFallback();
+      streamRef.current = stream;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
-        await videoRef.current.play();
+        // iOS: serve loadedmetadata prima di play, con playsInline + muted
+        await new Promise((resolve) => {
+          const onLoaded = () => { videoRef.current.removeEventListener("loadedmetadata", onLoaded); resolve(); };
+          videoRef.current.addEventListener("loadedmetadata", onLoaded);
+        });
+        await videoRef.current.play().catch(() => {}); // in caso iOS sia schizzinoso
       }
-      streamRef.current = stream;
       setCameraOpen(true);
     } catch (err) {
-      alert("Camera error: " + err.message);
+      setCamError(err.message || String(err));
+      setCameraOpen(true); // mostriamo il modal comunque, con l’errore
     }
   };
 
   const capturePhoto = () => {
-    if (!videoRef.current) return;
     const video = videoRef.current;
+    if (!video || !video.videoWidth || !video.videoHeight) {
+      setCamError("Camera not ready. Wait a moment and try again.");
+      return;
+    }
     const canvas = document.createElement("canvas");
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
+    // riduci a 1280 max per non generare mostri
+    const maxW = 1280;
+    const scale = Math.min(1, maxW / video.videoWidth);
+    canvas.width = Math.round(video.videoWidth * scale);
+    canvas.height = Math.round(video.videoHeight * scale);
     const ctx = canvas.getContext("2d");
-    ctx.drawImage(video, 0, 0);
-    const dataUrl = canvas.toDataURL("image/png");
-    setFiles(prev => [...prev, { file: null, dataUrl }]);
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const dataUrl = canvas.toDataURL("image/png"); // "image/png" va benissimo per il backend
+    if (!dataUrl.startsWith("data:image/")) {
+      setCamError("Capture failed.");
+      return;
+    }
+    setFiles((prev) => [...prev, { file: null, dataUrl }]);
     closeCamera();
   };
 
   const closeCamera = () => {
     if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
     }
     setCameraOpen(false);
+    setCamError("");
   };
+
+  useEffect(() => {
+    // cleanup se il componente viene smontato con camera aperta
+    return () => {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
+      }
+    };
+  }, []);
 
   const submit = async () => {
     try {
@@ -181,7 +227,7 @@ export default function App() {
         <section className="mb-6">
           <div className="bg-white border rounded-2xl shadow-sm">
             <div className="flex items-center justify-between p-4">
-              <h2 className="font-semibold">Assistant Chat</h2>
+              <h2 className="font-semibold">Assistant Chat (English)</h2>
               <div className="flex gap-2">
                 <button onClick={() => setChatOpen(!chatOpen)} className="text-sm underline">
                   {chatOpen ? "Hide" : "Show"}
@@ -235,17 +281,46 @@ export default function App() {
                 <Upload className="w-5 h-5" />
                 <div>
                   <p className="font-medium">Upload or Take Photos</p>
+                  <p className="text-xs text-slate-500">Max {MAX_FILES} files, 6 MB each</p>
                 </div>
               </div>
               <div className="mt-4 flex gap-2">
-                <input type="file" accept="image/*" multiple
+                <input
+                  type="file"
+                  accept="image/*"
+                  multiple
                   onChange={(e) => handleFiles(e.target.files)}
-                  className="block w-full text-sm" />
+                  className="block w-full text-sm"
+                />
                 <button type="button" onClick={startCamera}
                   className="px-3 py-2 rounded-xl bg-slate-900 text-white text-sm flex items-center gap-1">
                   <Camera className="w-4 h-4" /> Take Photo
                 </button>
               </div>
+
+              {/* Anteprima live camera */}
+              {cameraOpen && (
+                <div className="mt-4 border rounded-2xl p-3 bg-slate-50">
+                  {camError ? (
+                    <p className="text-sm text-red-600">{camError}</p>
+                  ) : (
+                    <>
+                      <video
+                        ref={videoRef}
+                        autoPlay
+                        playsInline
+                        muted
+                        className="w-full max-w-md rounded-xl border mx-auto"
+                      />
+                      <div className="flex gap-2 justify-center mt-3">
+                        <button onClick={capturePhoto} className="px-4 py-2 bg-green-600 text-white rounded-xl">Capture</button>
+                        <button onClick={closeCamera} className="px-4 py-2 bg-red-600 text-white rounded-xl">Cancel</button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+
               {files.length > 0 && (
                 <div className="mt-4 grid grid-cols-2 md:grid-cols-3 gap-3">
                   {files.map((f, i) => (
@@ -263,34 +338,165 @@ export default function App() {
             </div>
           </div>
 
-          {/* Metadata a lato */}
+          {/* Metadata */}
           <aside className="space-y-4">
-            {/* … lascia come già avevi, invariato … */}
+            <div className="bg-white border rounded-2xl p-4 shadow-sm">
+              <h2 className="font-semibold mb-3">Metadata</h2>
+
+              <label className="block text-sm mb-2">Location</label>
+              <input
+                className="w-full border rounded-lg p-2 mb-2"
+                placeholder="e.g. Port of Naples"
+                value={meta.location}
+                onChange={(e) => setMeta({ ...meta, location: e.target.value })}
+              />
+              <button
+                type="button"
+                className="text-xs underline"
+                onClick={() => {
+                  if (!navigator.geolocation) return;
+                  navigator.geolocation.getCurrentPosition((pos) => {
+                    setMeta({
+                      ...meta,
+                      coords: { lat: pos.coords.latitude, lon: pos.coords.longitude },
+                      location: `${pos.coords.latitude.toFixed(5)}, ${pos.coords.longitude.toFixed(5)}`,
+                    });
+                  });
+                }}
+              >
+                Use my position
+              </button>
+
+              <label className="block text-sm mt-3 mb-2">Area</label>
+              <select
+                className="w-full border rounded-lg p-2 mb-3"
+                value={meta.area}
+                onChange={(e) => setMeta({ ...meta, area: e.target.value })}
+              >
+                <option>Hull/Topside</option>
+                <option>Deck</option>
+                <option>Ballast Tank</option>
+                <option>Superstructure</option>
+                <option>Underwater Hull</option>
+                <option>Hatch Covers</option>
+                <option>Cargo Holds Dry</option>
+                <option>Internal Visible Steel</option>
+                <option>Internal Decks</option>
+                <option>Fresh/Drinking Water Tank</option>
+                <option>Heat Resistance</option>
+              </select>
+
+              <label className="block text-sm mb-2">Environment</label>
+              <select
+                className="w-full border rounded-lg p-2 mb-3"
+                value={meta.environment}
+                onChange={(e) => setMeta({ ...meta, environment: e.target.value })}
+              >
+                <option>Auto</option>
+                <option>C3</option>
+                <option>C4</option>
+                <option>C5M</option>
+                <option>C5I</option>
+                <option>CX</option>
+              </select>
+
+              <label className="block text-sm mb-2">Substrate</label>
+              <select
+                className="w-full border rounded-lg p-2 mb-3"
+                value={meta.substrate}
+                onChange={(e) => setMeta({ ...meta, substrate: e.target.value })}
+              >
+                <option>Steel</option>
+                <option>Aluminium</option>
+              </select>
+
+              <label className="block text-sm mb-2">Existing system</label>
+              <select
+                className="w-full border rounded-lg p-2"
+                value={meta.existingSystem}
+                onChange={(e) => setMeta({ ...meta, existingSystem: e.target.value })}
+              >
+                <option>Unknown</option>
+                <option>Epoxy/PU</option>
+                <option>Antifouling</option>
+                <option>Silicone</option>
+              </select>
+            </div>
+
+            <div className="bg-white border rounded-2xl p-4 shadow-sm">
+              <button
+                onClick={submit}
+                className="w-full inline-flex justify-center items-center gap-2 rounded-xl px-4 py-2 font-semibold bg-slate-900 text-white hover:bg-slate-800"
+                disabled={loading}
+              >
+                {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                {loading ? "Analyzing" : "Analyze"}
+              </button>
+              {error && <p className="text-red-600 text-sm mt-2">{error}</p>}
+            </div>
+
+            <div className="bg-white border rounded-2xl p-4 shadow-sm">
+              <div className="flex items-center gap-2 mb-1">
+                <ShieldCheck className="w-4 h-4" />
+                <h3 className="font-semibold">Disclaimer</h3>
+              </div>
+              <p className="text-xs text-slate-600">
+                Experimental support tool. Always confirm with inspection and PPG TDS.
+              </p>
+            </div>
           </aside>
         </section>
-
-        {/* Camera modal */}
-        {cameraOpen && (
-          <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50">
-            <div className="bg-white rounded-2xl p-4 shadow-lg">
-              <video ref={videoRef} autoPlay playsInline className="w-80 h-auto rounded-xl mb-3" />
-              <div className="flex gap-2 justify-center">
-                <button onClick={capturePhoto}
-                  className="px-4 py-2 bg-green-600 text-white rounded-xl">Capture</button>
-                <button onClick={closeCamera}
-                  className="px-4 py-2 bg-red-600 text-white rounded-xl">Cancel</button>
-              </div>
-            </div>
-          </div>
-        )}
 
         {/* Results */}
         {result && (
           <section className="mt-8">
             <h2 className="font-semibold mb-3">Results</h2>
-            {/* … risultato come già avevi … */}
-            <button onClick={askFromResults}
-              className="mt-4 px-4 py-2 rounded-xl bg-slate-900 text-white">Ask AI</button>
+            <p className="text-xs text-slate-500">
+              Estimated environment: <b>{result?.meta?.estimatedEnv || "-"}</b> · Used for rules:{" "}
+              <b>{result?.meta?.effectiveEnv || "-"}</b>
+            </p>
+            <div className="space-y-4 mt-2">
+              {result.items?.map((it, idx) => (
+                <div key={idx} className="bg-white border rounded-2xl p-4 shadow-sm">
+                  <div className="flex gap-4 items-start">
+                    <img
+                      src={files[idx]?.dataUrl || ""}
+                      alt="preview"
+                      className="w-32 h-32 object-cover rounded-xl border"
+                    />
+                    <div className="flex-1">
+                      <p className="text-sm text-slate-500">
+                        Defect: <span className="font-medium text-slate-800">{it.defect?.type}</span> · Severity:{" "}
+                        <span className="font-medium">{it.defect?.severity}</span> · Confidence:{" "}
+                        {Math.round((it.defect?.confidence || 0) * 100)}%
+                      </p>
+                      <p className="text-sm text-slate-500">AI Notes: {it.defect?.notes}</p>
+                      <div className="mt-2 p-3 bg-slate-50 rounded-2xl border">
+                        <p className="text-sm font-semibold">Recommended cycle</p>
+                        <ul className="text-sm list-disc pl-5">
+                          {it.recommendation?.products?.map((p, i) => (
+                            <li key={i}>
+                              <span className="font-medium">{p.name}</span> · {p.dft} · {p.notes}
+                            </li>
+                          ))}
+                        </ul>
+                        {it.recommendation?.surfacePrep && (
+                          <p className="text-xs text-slate-600 mt-2">
+                            Surface prep: {it.recommendation.surfacePrep}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-4">
+              <button onClick={askFromResults} className="px-4 py-2 rounded-xl bg-slate-900 text-white">
+                Ask AI
+              </button>
+            </div>
           </section>
         )}
       </main>
@@ -303,3 +509,4 @@ export default function App() {
     </div>
   );
 }
+
