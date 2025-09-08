@@ -11,13 +11,13 @@ If unsure, type=general_corrosion, severity=moderate. Not Able to Verify, ASK PP
 // Reusable product blocks
 const BLOCKS = {
   ballast: { name: "Sigmaprime 200", dft: "160 µm x2 coat + stripe coat x2 75 µm )", notes: "stripe coat edges/welds and any other area subject to heavy corrosion, ask ai to have more information" },
-  Primer200: { name: "Sigmaprime 200", dft: "125 µm (2x)", notes: "Universal epoxy anticorrosive primer, based upon pure epoxy technology " },
+  primer200: { name: "Sigmaprime 200", dft: "125 µm (2x)", notes: "Universal epoxy anticorrosive primer, based upon pure epoxy technology " },
   intermedio350: { name: "Sigmacover 350", dft: "125 µm (1x)", notes: "anticorrosive intermediate" },
   intermedio380: { name: "Sigmacover 380", dft: "125 µm (1x)", notes: "barrier/rebuild" },
   finitura550: { name: "Sigmadur 550", dft: "50 µm (1x)", notes: "polyurethane finish" },
   primerRapido28: { name: "Sigmarine 28", dft: "75 µm (1x)", notes: "fast drying primer" },
   antifouling: { name: "Ecofleet 530", dft: "see TDS", notes: "antifouling; verify tie-coat" },
-  immersionEpoxy: { name: "Sigmashield 1200", dft: "2×200 µm", notes: "immersion-grade epoxy" },
+  immersionEpoxy: { name: "Sigmaprime 200", dft: "125 µm (2x)", notes: "Universal epoxy anticorrosive primer, based upon pure epoxy technology " },
   deckNonSkid: { name: "Aggregate broadcast", dft: "—", notes: "non-skid system with aggregate" },
 };
 
@@ -53,7 +53,7 @@ function cycleFor({ area, defectType, env }) {
     if (defectType === "mechanical_damage") {
       return {
         surfacePrep: "Sanding/roughening; restore profile; clean and degrease.",
-        products: [BLOCKS.primerRapido28, BLOCKS.finitura550, BLOCKS.deckNonSkid],
+        products: [BLOCKS.primer200, BLOCKS.finitura550, BLOCKS.deckNonSkid],
       };
     }
     if (defectType === "blistering" || defectType === "delamination") {
