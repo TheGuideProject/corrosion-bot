@@ -5,20 +5,13 @@ function cors() {
   return { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "POST, OPTIONS", "Access-Control-Allow-Headers": "Content-Type" };
 }
 
-// ✅ named export `handler` for Netlify
 export const handler = async (event) => {
-  if (event.httpMethod === "OPTIONS") {
-    return { statusCode: 204, headers: cors() };
-  }
-  if (event.httpMethod !== "POST") {
-    return { statusCode: 405, headers: cors(), body: "Method Not Allowed" };
-  }
+  if (event.httpMethod === "OPTIONS") return { statusCode: 204, headers: cors() };
+  if (event.httpMethod !== "POST") return { statusCode: 405, headers: cors(), body: "Method Not Allowed" };
 
   try {
     const { question, meta, lastResult } = JSON.parse(event.body || "{}");
-    if (!question) {
-      return { statusCode: 400, headers: { ...cors(), "Content-Type": "application/json" }, body: JSON.stringify({ error: "Missing question" }) };
-    }
+    if (!question) return { statusCode: 400, headers: { ...cors(), "Content-Type": "application/json" }, body: JSON.stringify({ error: "Missing question" }) };
 
     const system = `You are a coatings technical assistant for marine environments. Answer in English only. Be concise, give numbered procedures where useful, and reference PPG generic product families mentioned in context without inventing specs. Mention ISO 8501/12944 at a high level if relevant.`;
 
